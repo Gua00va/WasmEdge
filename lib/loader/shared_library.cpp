@@ -21,6 +21,13 @@
 #error Unsupported os!
 #endif
 
+#if WASMEDGE_OS_LINUX || WASMEDGE_OS_MACOS
+extern "C" {
+extern void __register_frame(void *);
+extern void __deregister_frame(void *);
+}
+#endif
+
 namespace {
 inline constexpr uint64_t roundDownPageBoundary(const uint64_t Value) {
 // ARM64 Mac has a special page size
@@ -109,7 +116,16 @@ Expect<void> SharedLibrary::load(const AST::AOTSection &AOTSec) noexcept {
       break;
     case 3: // BSS
       break;
-#if WASMEDGE_OS_WINDOWS
+#if WASMEDGE_OS_LINUX
+    case 4: // EHFrame
+      EHFrameAddress = reinterpret_cast<void *>(Binary + Offset);
+      break;
+#elif WASMEDGE_OS_MACOS
+    case 4: // EHFrame
+      EHFrameAddress = reinterpret_cast<uint8_t *>(Binary + Offset);
+      EHFrameSize = Size;
+      break;
+#elif WASMEDGE_OS_WINDOWS
     case 4: // PData
       PDataAddress = reinterpret_cast<void *>(Binary + Offset);
       PDataSize =
@@ -131,7 +147,24 @@ Expect<void> SharedLibrary::load(const AST::AOTSection &AOTSec) noexcept {
   TypesAddress = AOTSec.getTypesAddress();
   CodesAddress = AOTSec.getCodesAddress();
 
-#if WASMEDGE_OS_WINDOWS
+#if WASMEDGE_OS_LINUX
+  if (EHFrameAddress) {
+    __register_frame(EHFrameAddress);
+  }
+#elif WASMEDGE_OS_MACOS
+  if (EHFrameAddress) {
+    auto Iter = EHFrameAddress;
+    const auto End = EHFrameAddress + EHFrameSize - 4;
+
+    while (Iter < End) {
+      if (Iter != EHFrameAddress) {
+        __register_frame(Iter);
+      }
+      const uint32_t Length = *reinterpret_cast<const uint32_t *>(Iter);
+      Iter += Length + 4;
+    }
+  }
+#elif WASMEDGE_OS_WINDOWS
   if (PDataSize != 0) {
     winapi::RtlAddFunctionTable(
         static_cast<winapi::PRUNTIME_FUNCTION_>(PDataAddress), PDataSize,
@@ -144,7 +177,24 @@ Expect<void> SharedLibrary::load(const AST::AOTSection &AOTSec) noexcept {
 
 void SharedLibrary::unload() noexcept {
   if (Binary) {
-#if WASMEDGE_OS_WINDOWS
+#if WASMEDGE_OS_LINUX
+    if (EHFrameAddress) {
+      __deregister_frame(EHFrameAddress);
+    }
+#elif WASMEDGE_OS_MACOS
+    if (EHFrameAddress) {
+      auto Iter = EHFrameAddress;
+      const auto End = EHFrameAddress + EHFrameSize - 4;
+
+      while (Iter < End) {
+        if (Iter != EHFrameAddress) {
+          __deregister_frame(Iter);
+        }
+        const uint32_t Length = *reinterpret_cast<const uint32_t *>(Iter);
+        Iter += Length + 4;
+      }
+    }
+#elif WASMEDGE_OS_WINDOWS
     if (PDataSize != 0) {
       winapi::RtlDeleteFunctionTable(
           static_cast<winapi::PRUNTIME_FUNCTION_>(PDataAddress));
