@@ -24,43 +24,34 @@ else()
     GIT_TAG  tags/v3.2.1
     GIT_SHALLOW TRUE)
 
-  if(MSVC)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-      get_property(
-        compile_options
-        DIRECTORY
-        PROPERTY COMPILE_OPTIONS
-        )
-      set_property(
-        DIRECTORY
-        APPEND
-        PROPERTY COMPILE_OPTIONS
-        -Wno-undef
-        -Wno-suggest-override
-        -Wno-documentation
-        -Wno-sign-conversion
-        -Wno-extra-semi-stmt
-        -Wno-old-style-cast
-        -Wno-error=unused-parameter
-        -Wno-error=unused-template
-        -Wno-conditional-uninitialized
-        -Wno-implicit-int-conversion
-        -Wno-shorten-64-to-32
-        -Wno-range-loop-bind-reference
-        -Wno-format-nonliteral
-        -Wno-unused-exception-parameter
-        -Wno-unused-member-function
-        )
-      unset(compile_options)
-    elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-      set_property(
-        DIRECTORY
-        APPEND
-        PROPERTY COMPILE_OPTIONS
-        /wd4100 # unreferenced formal parameter
-        )
-    endif()
-  endif()
+  if( MSVC )
+    get_property(
+      compile_options
+      DIRECTORY
+      PROPERTY COMPILE_OPTIONS
+      )
+    set_property(
+      DIRECTORY
+      APPEND
+      PROPERTY COMPILE_OPTIONS
+      -Wno-undef
+      -Wno-suggest-override
+      -Wno-documentation
+      -Wno-sign-conversion
+      -Wno-extra-semi-stmt
+      -Wno-old-style-cast
+      -Wno-error=unused-parameter
+      -Wno-error=unused-template
+      -Wno-conditional-uninitialized
+      -Wno-implicit-int-conversion
+      -Wno-shorten-64-to-32
+      -Wno-range-loop-bind-reference
+      -Wno-format-nonliteral
+      -Wno-unused-exception-parameter
+      -Wno-unused-member-function
+      )
+    unset(compile_options)
+  endif( MSVC )
 
   FetchContent_MakeAvailable(simdjson)
 
@@ -80,7 +71,7 @@ function(wasmedge_copy_spec_testsuite proposal)
   message(STATUS "Copying test suite to ${CMAKE_CURRENT_BINARY_DIR}/testSuites/${proposal} -- done")
 endfunction()
 
-foreach(PROPOSAL core multi-memory tail-call extended-const threads function-references)
+foreach(PROPOSAL core multi-memory tail-call extended-const threads memory64 function-references)
   wasmedge_copy_spec_testsuite(${PROPOSAL})
 endforeach()
 
