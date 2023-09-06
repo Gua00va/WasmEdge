@@ -245,6 +245,7 @@ static const TestsuiteProposal TestsuiteProposals[] = {
     {"threads"sv, {Proposal::Threads}},
     {"function-references"sv,
      {Proposal::FunctionReferences, Proposal::TailCall}},
+    {"memory64"sv, {Proposal::Memory64}},
 };
 
 } // namespace
