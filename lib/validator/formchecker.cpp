@@ -924,7 +924,6 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
 
   // Memory Instructions.
   case OpCode::I32__load:
-    // TODO: extend this selection to all new memory64 instructions
     return checkAlignAndTrans(32, {getIt()}, {VType(ValType::I32)});
   case OpCode::I64__load:
     return checkAlignAndTrans(64, {ValType(TypeCode::I32)},
@@ -1009,7 +1008,7 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
                            ErrInfo::IndexCategory::Memory,
                            Instr.getSourceIndex(), Mems);
     }
-    [[fallthrough]];
+    return checkMemAndTrans({getIt(), getIt(), getIt()}, {});
   case OpCode::Memory__fill:
     return checkMemAndTrans({ValType(TypeCode::I32), ValType(TypeCode::I32),
                              ValType(TypeCode::I32)},
