@@ -61,7 +61,6 @@ Expect<void> Validator::validate(const AST::Module &Mod) {
     spdlog::error(ErrInfo::InfoAST(ASTNodeAttr::Module));
     return Unexpect(Res);
   }
-
   // Validate export section.
   if (auto Res = validate(Mod.getExportSection()); !Res) {
     spdlog::error(ErrInfo::InfoAST(ASTNodeAttr::Sec_Export));
