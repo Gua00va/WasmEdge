@@ -14,8 +14,8 @@
 #pragma once
 
 #include "ast/type.h"
-#include "module.h"
 #include "common/types.h"
+#include "module.h"
 #include <vector>
 
 namespace WasmEdge {
@@ -59,13 +59,9 @@ public:
 
   bool isArray() const { return std::holds_alternative<AST::ArrayType>(Type); }
 
-  const ModuleInstance* getModInst() const {
-    return ModInst;
-  }
+  const ModuleInstance *getModInst() const { return ModInst; }
 
-  uint32_t getTypeIdx() const {
-    return TypeIdx;
-  }
+  uint32_t getTypeIdx() const { return TypeIdx; }
 
   // Array method
   bool checkArrayIdx(uint32_t Idx) const {

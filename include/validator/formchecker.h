@@ -50,7 +50,7 @@ public:
   Expect<void> validate(const ValType &VT) const noexcept;
 
   /// Adder of contexts
-  void addType(const AST::DefinedType &Type);
+  void addType(const AST::SubType &Type);
   void addFunc(const uint32_t TypeIdx, const bool IsImport = false);
   void addTable(const AST::TableType &Tab);
   void addMemory(const AST::MemoryType &Mem);
@@ -61,26 +61,6 @@ public:
   void addLocal(const ValType &V, bool Initialized);
   Expect<AST::ArrayType> checkArrayType(const uint32_t TypeIdx) const;
   Expect<AST::StructType> checkStructType(const uint32_t TypeIdx) const;
-
-  bool match_type(const FullValType &LHS,
-                  const FullValType &RHS) const noexcept {
-    if (LHS == RHS) {
-      return true;
-    }
-    if (LHS.isRefType() && RHS.isRefType()) {
-      return match_type(LHS.asRefType(), RHS.asRefType());
-    }
-    return false;
-  }
-
-  bool match_type(const FullRefType &LHS,
-                  const FullRefType &RHS) const noexcept {
-    if (!match_type(LHS.getHeapType(), RHS.getHeapType())) {
-      return false;
-    }
-    return LHS.getTypeCode() == RefTypeCode::Ref ||
-           RHS.getTypeCode() == RefTypeCode::RefNull;
-  }
 
   bool match_type(const HeapType &LHS, const HeapType &RHS) const noexcept {
     if (LHS == RHS) {
@@ -239,19 +219,6 @@ public:
            match_type(LHS.getReturnTypes(), RHS.getReturnTypes());
   }
 
-  bool match_type(Span<const FullValType> LHS,
-                  Span<const FullValType> RHS) const noexcept {
-    if (LHS.size() != RHS.size()) {
-      return false;
-    }
-    for (uint32_t I = 0; I < LHS.size(); I++) {
-      if (!match_type(LHS[I], RHS[I])) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   std::vector<VType> result() { return ValStack; }
   auto &getTypes() { return Types; }
   auto &getFunctions() { return Funcs; }
@@ -328,7 +295,7 @@ private:
   Expect<void> StackPopAny();
 
   /// Contexts.
-  std::vector<AST::DefinedType> Types;
+  std::vector<const AST::SubType &> Types;
   std::vector<uint32_t> Funcs;
   std::vector<ValType> Tables;
   uint32_t Mems = 0;

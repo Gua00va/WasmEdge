@@ -81,7 +81,7 @@ void FormChecker::addType(const AST::FunctionType &Func) {
   Types.emplace_back(std::move(Param), std::move(Ret));
 }
 
-void FormChecker::addType(const AST::DefinedType &Type) {
+void FormChecker::addType(const AST::SubType &Type) {
   Types.emplace_back(Type);
 }
 
@@ -124,36 +124,6 @@ void FormChecker::addLocal(const ValType &V, bool Initialized) {
     LocalInits.push_back(static_cast<uint32_t>(Locals.size() - 1));
     Locals.back().IsInit = true;
   }
-}
-
-Expect<AST::ArrayType>
-FormChecker::checkArrayType(const uint32_t TypeIdx) const {
-  if (TypeIdx >= Types.size()) {
-    return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
-                         ErrInfo::IndexCategory::FunctionType, TypeIdx,
-                         Types.size());
-  }
-  const auto &Type = Types[TypeIdx];
-  if (!Type.isType<AST::ArrayType>()) {
-    spdlog::error("array instruction gets non-array type");
-    return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
-  }
-  return Type.asArrayType();
-}
-
-Expect<AST::StructType>
-FormChecker::checkStructType(const uint32_t TypeIdx) const {
-  if (TypeIdx >= Types.size()) {
-    return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
-                         ErrInfo::IndexCategory::FunctionType, TypeIdx,
-                         Types.size());
-  }
-  const auto &Type = Types[TypeIdx];
-  if (!Type.isType<AST::StructType>()) {
-    spdlog::error("array instruction gets non-array type");
-    return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
-  }
-  return Type.asStructType();
 }
 
 ValType FormChecker::VTypeToAST(const VType &V) {
@@ -742,6 +712,11 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
     assuming(TypeIdx < Types.size());
     return StackTrans({}, {ValType(TypeCode::Ref, TypeIdx)});
   }
+  case OpCode::Ref__eq: {
+    return StackTrans({ValType(TypeCode::RefNull, TypeCode::EqRef),
+                       ValType(TypeCode::RefNull, TypeCode::EqRef)},
+                      {ValType(TypeCode::I32)});
+  }
   case OpCode::Ref__as_non_null: {
     if (auto Res = popType()) {
       if (*Res == unreachableVType()) {
@@ -761,7 +736,87 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
     }
   }
 
-  // GC Instructions.
+  case OpCode::Struct__new: {
+    auto TypeIdx = Instr.getTargetIndex();
+    if (auto Res = checkStructType(TypeIdx)) {
+      const auto &StructType = *Res;
+      std::vector<FullValType> InputVal;
+      for (const auto &FieldType : StructType.getContent()) {
+        InputVal.push_back(FieldType.getStorageType().unpackedType());
+      }
+      return StackTrans(InputVal,
+                        {FullValType(FullRefType(RefTypeCode::Ref, TypeIdx))});
+    } else {
+      spdlog::error("invalid struct type idx at struct.new_canon");
+      return Unexpect(Res);
+    }
+  }
+  case OpCode::Struct__new_default: {
+    auto TypeIdx = Instr.getTargetIndex();
+    if (auto Res = checkStructType(TypeIdx)) {
+      return StackTrans({},
+                        {FullValType(FullRefType(RefTypeCode::Ref, TypeIdx))});
+    } else {
+      spdlog::error("invalid struct type idx at struct.new_canon");
+      return Unexpect(Res);
+    }
+  }
+  case OpCode::Struct__get:
+  case OpCode::Struct__get_s:
+  case OpCode::Struct__get_u: {
+    auto TypeIdx = Instr.getTargetIndex();
+    if (auto Res = checkStructType(TypeIdx)) {
+      const auto &StructType = *Res;
+      auto FieldIdx = Instr.getSourceIndex();
+      if (FieldIdx >= StructType.getContent().size()) {
+        return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
+                             ErrInfo::IndexCategory::FunctionType, FieldIdx,
+                             StructType.getContent().size());
+      }
+      const auto &FieldType = StructType.getContent()[FieldIdx];
+      if (FieldType.getStorageType().isValType() &&
+          Instr.getOpCode() != OpCode::Struct__get) {
+        spdlog::error("struct.get_<s/x> is only for packed type");
+        return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
+      }
+      if (FieldType.getStorageType().isPackedType() &&
+          Instr.getOpCode() == OpCode::Struct__get) {
+        spdlog::error("struct.get cannot on packed type");
+        return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
+      }
+      return StackTrans(
+          {FullValType(FullRefType(RefTypeCode::RefNull, TypeIdx))},
+          {FieldType.getStorageType().unpackedType()});
+    } else {
+      spdlog::error("invalid struct type idx at struct.get");
+      return Unexpect(Res);
+    }
+  }
+  case OpCode::Struct__set: {
+    auto TypeIdx = Instr.getTargetIndex();
+    if (auto Res = checkStructType(TypeIdx)) {
+      const auto &StructType = *Res;
+      auto FieldIdx = Instr.getSourceIndex();
+      if (FieldIdx >= StructType.getContent().size()) {
+        return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
+                             ErrInfo::IndexCategory::FunctionType, FieldIdx,
+                             StructType.getContent().size());
+      }
+      const auto &FieldType = StructType.getContent()[FieldIdx];
+      if (FieldType.getMutability() == ValMut::Const) {
+        spdlog::error("struct.set can only for mutable field");
+        return Unexpect(ErrCode::Value::InvalidMut);
+      }
+      return StackTrans(
+          {FullValType(FullRefType(RefTypeCode::RefNull, TypeIdx)),
+           FieldType.getStorageType().unpackedType()},
+          {});
+    } else {
+      spdlog::error("invalid struct type idx at struct.set");
+      return Unexpect(Res);
+    }
+  }
+
   case OpCode::Array__new_canon: {
     auto TypeIdx = Instr.getTargetIndex();
     if (auto Res = checkArrayType(TypeIdx)) {
@@ -917,337 +972,45 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
     }
   }
   case OpCode::Array__len: {
-    return StackTrans({FullValType(FullRefType(HeapTypeCode::Array))},
-                      {FullValType(ValType::I32)});
-  }
-  case OpCode::Struct__new_canon: {
-    auto TypeIdx = Instr.getTargetIndex();
-    if (auto Res = checkStructType(TypeIdx)) {
-      const auto &StructType = *Res;
-      std::vector<FullValType> InputVal;
-      for (const auto &FieldType : StructType.getContent()) {
-        InputVal.push_back(FieldType.getStorageType().unpackedType());
-      }
-      return StackTrans(InputVal,
-                        {FullValType(FullRefType(RefTypeCode::Ref, TypeIdx))});
-    } else {
-      spdlog::error("invalid struct type idx at struct.new_canon");
-      return Unexpect(Res);
-    }
-  }
-  case OpCode::Struct__new_canon_default: {
-    auto TypeIdx = Instr.getTargetIndex();
-    if (auto Res = checkStructType(TypeIdx)) {
-      return StackTrans({},
-                        {FullValType(FullRefType(RefTypeCode::Ref, TypeIdx))});
-    } else {
-      spdlog::error("invalid struct type idx at struct.new_canon");
-      return Unexpect(Res);
-    }
-  }
-  case OpCode::Struct__set: {
-    auto TypeIdx = Instr.getTargetIndex();
-    if (auto Res = checkStructType(TypeIdx)) {
-      const auto &StructType = *Res;
-      auto FieldIdx = Instr.getSourceIndex();
-      if (FieldIdx >= StructType.getContent().size()) {
-        return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
-                             ErrInfo::IndexCategory::FunctionType, FieldIdx,
-                             StructType.getContent().size());
-      }
-      const auto &FieldType = StructType.getContent()[FieldIdx];
-      if (FieldType.getMutability() == ValMut::Const) {
-        spdlog::error("struct.set can only for mutable field");
-        return Unexpect(ErrCode::Value::InvalidMut);
-      }
-      return StackTrans(
-          {FullValType(FullRefType(RefTypeCode::RefNull, TypeIdx)),
-           FieldType.getStorageType().unpackedType()},
-          {});
-    } else {
-      spdlog::error("invalid struct type idx at struct.set");
-      return Unexpect(Res);
-    }
-  }
-  case OpCode::Struct__get_s:
-  case OpCode::Struct__get_u:
-  case OpCode::Struct__get: {
-    auto TypeIdx = Instr.getTargetIndex();
-    if (auto Res = checkStructType(TypeIdx)) {
-      const auto &StructType = *Res;
-      auto FieldIdx = Instr.getSourceIndex();
-      if (FieldIdx >= StructType.getContent().size()) {
-        return logOutOfRange(ErrCode::Value::InvalidFuncTypeIdx,
-                             ErrInfo::IndexCategory::FunctionType, FieldIdx,
-                             StructType.getContent().size());
-      }
-      const auto &FieldType = StructType.getContent()[FieldIdx];
-      if (FieldType.getStorageType().isValType() &&
-          Instr.getOpCode() != OpCode::Struct__get) {
-        spdlog::error("struct.get_<s/x> is only for packed type");
-        return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
-      }
-      if (FieldType.getStorageType().isPackedType() &&
-          Instr.getOpCode() == OpCode::Struct__get) {
-        spdlog::error("struct.get cannot on packed type");
-        return Unexpect(ErrCode::Value::InvalidFuncTypeIdx);
-      }
-      return StackTrans(
-          {FullValType(FullRefType(RefTypeCode::RefNull, TypeIdx))},
-          {FieldType.getStorageType().unpackedType()});
-    } else {
-      spdlog::error("invalid struct type idx at struct.get");
-      return Unexpect(Res);
-    }
-  }
-  case OpCode::I31__new: {
-    return StackTrans(
-        {FullValType(ValType::I32)},
-        {FullValType(FullRefType(RefTypeCode::Ref, HeapTypeCode::I31))});
-  }
-  case OpCode::I31__get_u:
-  case OpCode::I31__get_s: {
-    return StackTrans(
-        {FullValType(FullRefType(RefTypeCode::RefNull, HeapTypeCode::I31))},
-        {FullValType(ValType::I32)});
-  }
-  case OpCode::Ref__eq: {
-    return StackTrans({FullValType(FullRefType(HeapTypeCode::Eq)),
-                       FullValType(FullRefType(HeapTypeCode::Eq))},
-                      {FullValType(ValType::I32)});
-  }
+    return StackTrans({ValType(TypeCode::ArrayRef)}, {ValType(TypeCode::I32)});
+
   case OpCode::Ref__test_null:
-  case OpCode::Ref__test: {
-    FullRefType RType;
-    if (auto Res = popType()) {
-      if (*Res == unreachableVType()) {
-        // will not reach here. Validation succeeds.
-        return {};
-      }
-      if (!(*Res)->isRefType()) {
-        // TODO: add log
-        return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-      }
-      RType = (*Res)->asRefType();
+  case OpCode::Ref__test:
+    if (auto Res = validate(Instr.getValType())) {
+      return StackTrans({Instr.getValType()}, {ValType(TypeCode::I32)});
     } else {
       return Unexpect(Res);
     }
-    (void)RType;
-    const auto &HeapType = Instr.getHeapType();
-    (void)HeapType;
-    // TODO: check RType
-    pushType(ValType::I32);
-    return {};
-  }
   case OpCode::Ref__cast_null:
-  case OpCode::Ref__cast: {
-    FullRefType RType;
-    if (auto Res = popType()) {
-      if (*Res == unreachableVType()) {
-        // will not reach here. Validation succeeds.
-        return {};
-      }
-      if (!(*Res)->isRefType()) {
-        // TODO: add log
-        return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-      }
-      RType = (*Res)->asRefType();
+  case OpCode::Ref__cast:
+    if (auto Res = validate(Instr.getValType())) {
+      return StackTrans({Instr.getValType()}, {Instr.getValType()});
     } else {
       return Unexpect(Res);
     }
-    (void)RType;
-    const auto &HeapType = Instr.getHeapType();
-    (void)HeapType;
-    // TODO: check RType
-    if (Instr.getOpCode() == OpCode::Ref__cast) {
-      pushType(FullRefType(RefTypeCode::Ref, HeapType));
-    } else {
-      pushType(FullRefType(RefTypeCode::RefNull, HeapType));
-    }
-    return {};
-  }
-
   case OpCode::Br_on_cast:
-  case OpCode::Br_on_cast_null: {
-    if (auto D = checkCtrlStackDepth(Instr.getTargetIndex()); !D) {
-      return Unexpect(D);
-    } else {
-      FullRefType RType;
-      if (auto Res = popType()) {
-        if (*Res == unreachableVType()) {
-          // will not reach here. Validation succeeds.
-          return {};
-        }
-        if (!(*Res)->isRefType()) {
-          spdlog::error("the type to cast is not ref type");
-          return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-        }
-        RType = (*Res)->asRefType();
-      } else {
-        return Unexpect(Res);
-      }
-
-      auto LabelTypes = getLabelTypes(CtrlStack[*D]);
-      std::vector<FullValType> NTypes(LabelTypes.begin(), LabelTypes.end());
-      if (NTypes.empty()) {
-        spdlog::error("block return type should have a type for cast");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-      FullRefType BlockRType;
-      if (!NTypes.back().isRefType()) {
-        spdlog::error("the last block return type is not ref type");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      } else {
-        BlockRType = NTypes.back().asRefType();
-        NTypes.pop_back();
-      }
-      if (auto Res = popTypes(NTypes); !Res) {
-        // TODO: add log
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-
-      const auto &HeapType = Instr.getJumpHeapType();
-      FullRefType CastRType;
-      if (Instr.getOpCode() == OpCode::Br_on_cast_null) {
-        CastRType = FullRefType(RefTypeCode::RefNull, HeapType);
-      } else {
-        // Br_on_cast
-        CastRType = FullRefType(RefTypeCode::Ref, HeapType);
-      }
-      if (!match_type(CastRType, BlockRType)) {
-        spdlog::error("cast return type does not match block RType");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-      // TODO: check RType, BlockRType and HeapType
-
-      const uint32_t Remain =
-          static_cast<uint32_t>(ValStack.size() - CtrlStack[*D].Height);
-      const uint32_t Arity = static_cast<uint32_t>(
-          NTypes.size() +
-          1); // We plus 1 here because we did `pop_back` on `NTypes`
-      auto &Jump = const_cast<AST::Instruction &>(Instr).getJump();
-      Jump.StackEraseBegin = Remain + Arity;
-      Jump.StackEraseEnd = Arity;
-      Jump.PCOffset = static_cast<int32_t>(CtrlStack[*D].Jump - &Instr);
-      pushTypes(NTypes);
-      pushType(RType);
-      return {};
-    }
-  }
   case OpCode::Br_on_cast_fail:
-  case OpCode::Br_on_cast_fail_null: {
-    if (auto D = checkCtrlStackDepth(Instr.getTargetIndex()); !D) {
-      return Unexpect(D);
-    } else {
-      FullRefType RType;
-      if (auto Res = popType()) {
-        if (*Res == unreachableVType()) {
-          // will not reach here. Validation succeeds.
-          return {};
-        }
-        if (!(*Res)->isRefType()) {
-          spdlog::error("the type to cast is not ref type");
-          return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-        }
-        RType = (*Res)->asRefType();
-      } else {
-        return Unexpect(Res);
-      }
-
-      auto LabelTypes = getLabelTypes(CtrlStack[*D]);
-      std::vector<FullValType> NTypes(LabelTypes.begin(), LabelTypes.end());
-      if (NTypes.empty()) {
-        spdlog::error("block return type should have a type for cast");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-      FullRefType BlockRType;
-      if (!NTypes.back().isRefType()) {
-        spdlog::error("the last block return type is not ref type");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      } else {
-        BlockRType = NTypes.back().asRefType();
-        NTypes.pop_back();
-      }
-      if (auto Res = popTypes(NTypes); !Res) {
-        // TODO: add log
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-
-      const auto &HeapType = Instr.getJumpHeapType();
-      spdlog::error(HeapType);
-      FullRefType CastRType;
-      if (Instr.getOpCode() == OpCode::Br_on_cast_fail_null) {
-        CastRType = FullRefType(RefTypeCode::RefNull, HeapType);
-      } else {
-        // Br_on_cast_fail
-        CastRType = FullRefType(RefTypeCode::Ref, HeapType);
-      }
-      if (!match_type(RType, BlockRType)) {
-        spdlog::error("cast return type does not match block RType");
-        return Unexpect(ErrCode::Value::InvalidBrRefType);
-      }
-
-      // TODO: check RType, BlockRType and HeapType
-
-      const uint32_t Remain =
-          static_cast<uint32_t>(ValStack.size() - CtrlStack[*D].Height);
-      const uint32_t Arity = static_cast<uint32_t>(
-          NTypes.size() +
-          1); // We plus 1 here because we did `pop_back` on `NTypes`
-      auto &Jump = const_cast<AST::Instruction &>(Instr).getJump();
-      Jump.StackEraseBegin = Remain + Arity;
-      Jump.StackEraseEnd = Arity;
-      Jump.PCOffset = static_cast<int32_t>(CtrlStack[*D].Jump - &Instr);
-      pushTypes(NTypes);
-      pushType(CastRType);
-
-      return {};
-    }
-  }
-  case OpCode::Extern__externalize: {
-    FullRefType RType;
-    if (auto Res = popType()) {
-      if (*Res == unreachableVType()) {
-        // will not reach here. Validation succeeds.
-        return {};
-      }
-      if (!(*Res)->isRefType()) {
-        // TODO: add log
-        return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-      }
-      RType = (*Res)->asRefType();
+    // TODO: GC - implement
+    return {};
+  case OpCode::Any__convert_extern:
+    if (auto Res = popType(TypeCode::AnyRef)) {
+      return StackTrans({}, {ValType((*Res)->getCode(), TypeCode::ExternRef)});
     } else {
       return Unexpect(Res);
     }
-    if (!match_type(RType.getHeapType(), HeapTypeCode::Any)) {
-      spdlog::error("extern.externalize is only for any type");
-      return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-    }
-    pushType(FullRefType(RType.getTypeCode(), HeapTypeCode::Extern));
-    return {};
-  }
-  case OpCode::Extern__internalize: {
-    FullRefType RType;
-    if (auto Res = popType()) {
-      if (*Res == unreachableVType()) {
-        // will not reach here. Validation succeeds.
-        return {};
-      }
-      if (!(*Res)->isRefType()) {
-        // TODO: add log
-        return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-      }
-      RType = (*Res)->asRefType();
+  case OpCode::Extern__convert_any:
+    if (auto Res = popType(TypeCode::ExternRef)) {
+      return StackTrans({}, {ValType((*Res)->getCode(), TypeCode::AnyRef)});
     } else {
       return Unexpect(Res);
     }
-    if (!match_type(RType.getHeapType(), HeapTypeCode::Extern)) {
-      spdlog::error("extern.externalize is only for any type");
-      return Unexpect(ErrCode::ErrCode::Value::InvalidBrRefType);
-    }
-    pushType(FullRefType(RType.getTypeCode(), HeapTypeCode::Any));
-    return {};
-  }
+  case OpCode::Ref__i31:
+    return StackTrans({ValType(TypeCode::I32)},
+                      {ValType(TypeCode::Ref, TypeCode::I31Ref)});
+  case OpCode::I31__get_s:
+  case OpCode::I31__get_u:
+    return StackTrans({ValType(TypeCode::RefNull, TypeCode::I31Ref)},
+                      {ValType(TypeCode::I32)});
 
   // Parametric Instructions.
   case OpCode::Drop:
@@ -2349,132 +2112,132 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
   default:
     assumingUnreachable();
   }
-}
-
-void FormChecker::pushType(VType V) { ValStack.emplace_back(V); }
-
-void FormChecker::pushTypes(Span<const VType> Input) {
-  for (auto Val : Input) {
-    pushType(Val);
   }
-}
 
-void FormChecker::pushTypes(Span<const ValType> Input) {
-  for (auto Val : Input) {
-    pushType(Val);
-  }
-}
+  void FormChecker::pushType(VType V) { ValStack.emplace_back(V); }
 
-Expect<VType> FormChecker::popType() {
-  if (ValStack.size() == CtrlStack.back().Height) {
-    if (CtrlStack.back().IsUnreachable) {
-      return unreachableVType();
+  void FormChecker::pushTypes(Span<const VType> Input) {
+    for (auto Val : Input) {
+      pushType(Val);
     }
-    // Value stack underflow
-    spdlog::error(ErrCode::Value::TypeCheckFailed);
-    spdlog::error("    Value stack underflow.");
-    return Unexpect(ErrCode::Value::TypeCheckFailed);
-  }
-  auto Res = ValStack.back();
-  ValStack.pop_back();
-  return Res;
-}
-
-Expect<VType> FormChecker::popType(ValType E) {
-  auto Res = popType();
-  if (!Res) {
-    return Unexpect(Res);
-  }
-  if (*Res == unreachableVType()) {
-    return E;
   }
 
-  if (!matchType(E, **Res)) {
-    // Expect value on value stack is not matched
-    spdlog::error(ErrCode::Value::TypeCheckFailed);
-    spdlog::error(ErrInfo::InfoMismatch(VTypeToAST(E), VTypeToAST(*Res)));
-    return Unexpect(ErrCode::Value::TypeCheckFailed);
+  void FormChecker::pushTypes(Span<const ValType> Input) {
+    for (auto Val : Input) {
+      pushType(Val);
+    }
   }
-  return *Res;
-}
 
-Expect<void> FormChecker::popTypes(Span<const ValType> Input) {
-  for (auto Val = Input.rbegin(); Val != Input.rend(); ++Val) {
-    if (auto Res = popType(*Val); !Res) {
+  Expect<VType> FormChecker::popType() {
+    if (ValStack.size() == CtrlStack.back().Height) {
+      if (CtrlStack.back().IsUnreachable) {
+        return unreachableVType();
+      }
+      // Value stack underflow
+      spdlog::error(ErrCode::Value::TypeCheckFailed);
+      spdlog::error("    Value stack underflow.");
+      return Unexpect(ErrCode::Value::TypeCheckFailed);
+    }
+    auto Res = ValStack.back();
+    ValStack.pop_back();
+    return Res;
+  }
+
+  Expect<VType> FormChecker::popType(ValType E) {
+    auto Res = popType();
+    if (!Res) {
       return Unexpect(Res);
     }
-  }
-  return {};
-}
+    if (*Res == unreachableVType()) {
+      return E;
+    }
 
-void FormChecker::pushCtrl(Span<const ValType> In, Span<const ValType> Out,
-                           const AST::Instruction *Jump, OpCode Code) {
-  CtrlStack.emplace_back(In, Out, Jump, ValStack.size(), LocalInits.size(),
-                         Code);
-  pushTypes(In);
-}
+    if (!matchType(E, **Res)) {
+      // Expect value on value stack is not matched
+      spdlog::error(ErrCode::Value::TypeCheckFailed);
+      spdlog::error(ErrInfo::InfoMismatch(VTypeToAST(E), VTypeToAST(*Res)));
+      return Unexpect(ErrCode::Value::TypeCheckFailed);
+    }
+    return *Res;
+  }
 
-Expect<FormChecker::CtrlFrame> FormChecker::popCtrl() {
-  if (CtrlStack.empty()) {
-    // Ctrl stack is empty when popping.
-    spdlog::error(ErrCode::Value::TypeCheckFailed);
-    spdlog::error("    Control stack underflow.");
-    return Unexpect(ErrCode::Value::TypeCheckFailed);
+  Expect<void> FormChecker::popTypes(Span<const ValType> Input) {
+    for (auto Val = Input.rbegin(); Val != Input.rend(); ++Val) {
+      if (auto Res = popType(*Val); !Res) {
+        return Unexpect(Res);
+      }
+    }
+    return {};
   }
-  if (auto Res = popTypes(CtrlStack.back().EndTypes); !Res) {
-    return Unexpect(Res);
-  }
-  if (ValStack.size() != CtrlStack.back().Height) {
-    // Value stack size not matched.
-    spdlog::error(ErrCode::Value::TypeCheckFailed);
-    spdlog::error("    Value stack underflow.");
-    return Unexpect(ErrCode::Value::TypeCheckFailed);
-  }
-  // When popping a frame, reset the inited locals during this frame.
-  for (size_t I = CtrlStack.back().InitedLocal; I < LocalInits.size(); I++) {
-    Locals[LocalInits[I]].IsInit = false;
-  }
-  LocalInits.erase(LocalInits.begin() +
-                       static_cast<uint32_t>(CtrlStack.back().InitedLocal),
-                   LocalInits.end());
-  auto Head = std::move(CtrlStack.back());
-  CtrlStack.pop_back();
-  return Head;
-}
 
-Span<const ValType>
-FormChecker::getLabelTypes(const FormChecker::CtrlFrame &F) {
-  if (F.Code == OpCode::Loop) {
-    return F.StartTypes;
+  void FormChecker::pushCtrl(Span<const ValType> In, Span<const ValType> Out,
+                             const AST::Instruction *Jump, OpCode Code) {
+    CtrlStack.emplace_back(In, Out, Jump, ValStack.size(), LocalInits.size(),
+                           Code);
+    pushTypes(In);
   }
-  return F.EndTypes;
-}
 
-Expect<void> FormChecker::unreachable() {
-  while (ValStack.size() > CtrlStack.back().Height) {
+  Expect<FormChecker::CtrlFrame> FormChecker::popCtrl() {
+    if (CtrlStack.empty()) {
+      // Ctrl stack is empty when popping.
+      spdlog::error(ErrCode::Value::TypeCheckFailed);
+      spdlog::error("    Control stack underflow.");
+      return Unexpect(ErrCode::Value::TypeCheckFailed);
+    }
+    if (auto Res = popTypes(CtrlStack.back().EndTypes); !Res) {
+      return Unexpect(Res);
+    }
+    if (ValStack.size() != CtrlStack.back().Height) {
+      // Value stack size not matched.
+      spdlog::error(ErrCode::Value::TypeCheckFailed);
+      spdlog::error("    Value stack underflow.");
+      return Unexpect(ErrCode::Value::TypeCheckFailed);
+    }
+    // When popping a frame, reset the inited locals during this frame.
+    for (size_t I = CtrlStack.back().InitedLocal; I < LocalInits.size(); I++) {
+      Locals[LocalInits[I]].IsInit = false;
+    }
+    LocalInits.erase(LocalInits.begin() +
+                         static_cast<uint32_t>(CtrlStack.back().InitedLocal),
+                     LocalInits.end());
+    auto Head = std::move(CtrlStack.back());
+    CtrlStack.pop_back();
+    return Head;
+  }
+
+  Span<const ValType> FormChecker::getLabelTypes(
+      const FormChecker::CtrlFrame &F) {
+    if (F.Code == OpCode::Loop) {
+      return F.StartTypes;
+    }
+    return F.EndTypes;
+  }
+
+  Expect<void> FormChecker::unreachable() {
+    while (ValStack.size() > CtrlStack.back().Height) {
+      if (auto Res = popType(); !Res) {
+        return Unexpect(Res);
+      }
+    }
+    CtrlStack.back().IsUnreachable = true;
+    return {};
+  }
+
+  Expect<void> FormChecker::StackTrans(Span<const ValType> Take,
+                                       Span<const ValType> Put) {
+    if (auto Res = popTypes(Take); !Res) {
+      return Unexpect(Res);
+    }
+    pushTypes(Put);
+    return {};
+  }
+
+  Expect<void> FormChecker::StackPopAny() {
     if (auto Res = popType(); !Res) {
       return Unexpect(Res);
     }
+    return {};
   }
-  CtrlStack.back().IsUnreachable = true;
-  return {};
-}
-
-Expect<void> FormChecker::StackTrans(Span<const ValType> Take,
-                                     Span<const ValType> Put) {
-  if (auto Res = popTypes(Take); !Res) {
-    return Unexpect(Res);
-  }
-  pushTypes(Put);
-  return {};
-}
-
-Expect<void> FormChecker::StackPopAny() {
-  if (auto Res = popType(); !Res) {
-    return Unexpect(Res);
-  }
-  return {};
-}
 
 } // namespace Validator
 } // namespace WasmEdge

@@ -70,9 +70,6 @@ template <> inline ASTNodeAttr NodeAttrFromAST<AST::CodeSection>() noexcept {
 template <> inline ASTNodeAttr NodeAttrFromAST<AST::DataSection>() noexcept {
   return ASTNodeAttr::Sec_Data;
 }
-template <> inline ASTNodeAttr NodeAttrFromAST<AST::StructType>() noexcept {
-  return ASTNodeAttr::Type_Struct;
-}
 template <>
 inline ASTNodeAttr NodeAttrFromAST<AST::DataCountSection>() noexcept {
   return ASTNodeAttr::Sec_DataCount;
@@ -248,17 +245,13 @@ private:
   Expect<void> loadDesc(AST::ExportDesc &ExpDesc);
   Expect<ValType> loadHeapType(TypeCode TC, ASTNodeAttr From);
   Expect<ValType> loadRefType(ASTNodeAttr From);
-  Expect<ValType> loadValType(ASTNodeAttr From);
+  Expect<ValType> loadValType(ASTNodeAttr From, bool IsStorageType = false);
+  Expect<ValMut> loadMutability(ASTNodeAttr From);
+  Expect<AST::FieldType> loadFieldType(ASTNodeAttr From);
+  Expect<AST::CompositeType> loadCompositeType(ASTNodeAttr From);
+  Expect<AST::SubType> loadSubType(ASTNodeAttr From);
   Expect<void> loadLimit(AST::Limit &Lim);
-  Expect<void> loadRecursiveTypeGroup(std::vector<AST::DefinedType> &);
-  Expect<AST::DefinedType> loadSubType();
-  Expect<AST::DefinedType> loadSubType(bool IsFinal);
-  Expect<AST::StructType> loadStructType();
-  Expect<AST::ArrayType> loadArrayType();
-  Expect<AST::StructureType> loadStructureType();
-  Expect<AST::StorageType> loadStorageType();
-
-  Expect<void> loadType(AST::FieldType &FieldType);
+  Expect<void> loadType(AST::RecursiveType &RecType);
   Expect<void> loadType(AST::FunctionType &FuncType);
   Expect<void> loadType(AST::MemoryType &MemType);
   Expect<void> loadType(AST::TableType &TabType);
