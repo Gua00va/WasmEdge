@@ -924,8 +924,8 @@ Expect<void> FormChecker::checkInstr(const AST::Instruction &Instr) {
 
   // Memory Instructions.
   case OpCode::I32__load:
-    return checkAlignAndTrans(32, {VType(TypeCode::I32)},
-                              {VType(TypeCode::I32)});
+    return checkAlignAndTrans(32, {ValType(TypeCode::I32)},
+                              {ValType(TypeCode::I32)});
   case OpCode::I64__load:
     return checkAlignAndTrans(64, {ValType(TypeCode::I32)},
                               {ValType(TypeCode::I64)});
