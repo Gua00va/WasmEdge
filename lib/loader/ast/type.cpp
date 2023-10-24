@@ -135,7 +135,8 @@ Expect<void> Loader::loadLimit(AST::Limit &Lim) {
   Expect<uint64_t> Min, Max;
   // Read limit.
   if (auto Res = FMgr.readByte()) {
-    switch (static_cast<AST::Limit::LimitType>(*Res)) {
+    auto LimitType = static_cast<AST::Limit::LimitType>(*Res);
+    switch (LimitType) {
     case AST::Limit::LimitType::HasMin:
     case AST::Limit::LimitType::HasMinMax:
     case AST::Limit::LimitType::Shared:
@@ -148,9 +149,7 @@ Expect<void> Loader::loadLimit(AST::Limit &Lim) {
                             ASTNodeAttr::Type_Limit);
       }
       if (Lim.hasMax()) {
-        if (Max = FMgr.readU32(); Max) {
-          break;
-        } else {
+        if (Max = FMgr.readU32(); !Max) {
           return logLoadError(Max.error(), FMgr.getLastOffset(),
                               ASTNodeAttr::Type_Limit);
         }
@@ -177,9 +176,7 @@ Expect<void> Loader::loadLimit(AST::Limit &Lim) {
                             ASTNodeAttr::Type_Limit);
       }
       if (Lim.hasMax()) {
-        if (Max = FMgr.readU64(); Max) {
-          break;
-        } else {
+        if (Max = FMgr.readU64(); !Max) {
           return logLoadError(Max.error(), FMgr.getLastOffset(),
                               ASTNodeAttr::Type_Limit);
         }

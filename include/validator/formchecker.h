@@ -67,10 +67,10 @@ public:
   ValType getValTypeIt() {
     switch (IndexType) {
     case WasmEdge::AST::MemoryType::IndexType::I64:
-      return ValType::I64;
+      return TypeCode::I64;
     case WasmEdge::AST::MemoryType::IndexType::I32:
     default:
-      return ValType::I32;
+      return TypeCode::I32;
     }
   }
 
